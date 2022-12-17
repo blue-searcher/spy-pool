@@ -4,9 +4,14 @@
 	branch = v1.2.0
 [submodule "lib/goo-issuance"]
 	path = lib/goo-issuance
+	url = https://github.com/transmissions11/goo-issuance
 [submodule "lib/solmate"]
 	path = lib/solmate
+	url = https://github.com/transmissions11/solmate
 [submodule "lib/VRGDAs"]
 	path = lib/VRGDAs
+	url = https://github.com/transmissions11/VRGDAs
 [submodule "lib/openzeppelin-contracts"]
 	path = lib/openzeppelin-contracts
+	url = https://github.com/openzeppelin/openzeppelin-contracts
+	branch = v4.8.0
