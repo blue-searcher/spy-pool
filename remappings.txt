@@ -1,0 +1,6 @@
+ds-test/=lib/forge-std/lib/ds-test/src/
+forge-std/=lib/forge-std/src/
+solmate/=lib/solmate/src/
+VRGDAs/=lib/VRGDAs/src/
+@openzeppelin/=lib/openzeppelin-contracts/contracts/
+goo-issuance/=lib/goo-issuance/src/
