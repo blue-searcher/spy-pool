@@ -14,6 +14,7 @@ contract SpyPool is ERC721Holder {
     using FixedPointMathLib for uint256;
 
     address public owner;
+    uint256 public stopped;
 
     ISpy public immutable SPY_NFT;
     IERC721 public immutable KNIFE_NFT;
@@ -24,10 +25,20 @@ contract SpyPool is ERC721Holder {
 
     mapping(uint256 => address) public knifeOwners;
 
+    mapping(address => uint256) public mooSpent;
+
     modifier onlyOwner() {
         require(msg.sender == owner);
         _;
     }
+
+    modifier onlyIfActive() {
+        require(stopped == 0);
+        _;
+    }
+
+    //TODO Everyone can use the whole moo balance in multiple txs, fix it
+    //TODO Check everywhere if spy has been killed, spyBalances and spyOwners non updated in this case
 
     constructor(
         address _owner, 
@@ -59,13 +70,17 @@ contract SpyPool is ERC721Holder {
     //TODO Add migratePool() ... just in case
     //TODO Add distributeReward() NOTE: Based on score points not on spies count
 
+    function stop() external onlyOwner {
+        stopped = 1;
+    }
+
 
 
     /* DEPOSITS */
 
     //require approve() first
     //TODO array of uint256 param?
-    function depositSpy(uint256 _tokenId) external {
+    function depositSpy(uint256 _tokenId) external onlyIfActive {
         SPY_NFT.transferFrom(msg.sender, address(this), _tokenId);
 
         spyBalances[msg.sender] += 1;
@@ -76,7 +91,7 @@ contract SpyPool is ERC721Holder {
 
     //require approve() first
     //TODO array of uint256 param?
-    function depositKnife(uint256 _tokenId) external {
+    function depositKnife(uint256 _tokenId) external onlyIfActive {
         KNIFE_NFT.transferFrom(msg.sender, address(this), _tokenId);
 
         knifeOwners[_tokenId] = msg.sender;
@@ -93,15 +108,19 @@ contract SpyPool is ERC721Holder {
         uint256 totalSpies = SPY_NFT.balanceOf(address(this));
 
         _mooBalance = totalMooBalance * spyBalances[_user] / totalSpies;
+
+        if (mooSpent[_user] > _mooBalance) revert NotEnoughtMooBalance();
     }
 
 
 
     /* MINT / PURCHASE FUNCTIONS */
 
-    function mintSpyFromMoolah(uint256 _maxPrice) external returns (uint256 spyId) {
+    function mintSpyFromMoolah(uint256 _maxPrice) external onlyIfActive returns (uint256 spyId) {
         //TODO Review checks here, very important
         if (mooBalance(msg.sender) < _maxPrice) revert NotEnoughtMooBalance();
+
+        mooSpent[msg.sender] += KNIFE_GAME.spyPrice();
 
         spyId = KNIFE_GAME.mintSpyFromMoolah(_maxPrice);
 
@@ -109,22 +128,22 @@ contract SpyPool is ERC721Holder {
         spyOwners[spyId] = msg.sender;
     }
 
-    function mintKnifeFromMoolah(uint256 _maxPrice) public returns (uint256 knifeId) {
+    function mintKnifeFromMoolah(uint256 _maxPrice) public onlyIfActive returns (uint256 knifeId) {
         //TODO Review checks here, very important
         if (mooBalance(msg.sender) < _maxPrice) revert NotEnoughtMooBalance();
+
+        mooSpent[msg.sender] += KNIFE_GAME.knifePrice();
 
         knifeId = KNIFE_GAME.mintKnifeFromMoolah(_maxPrice);
 
         knifeOwners[knifeId] = msg.sender;
     }
 
-    function purchaseSpy(address _user) external payable returns (uint256 spyId) {
-        //TODO Why _user instead of msg.sender on the newly deployed game ?
+    function purchaseSpy() external payable onlyIfActive returns (uint256 spyId) {
+        spyId = KNIFE_GAME.purchaseSpy{value: msg.value}(msg.sender);
 
-        spyId = KNIFE_GAME.purchaseSpy{value: msg.value}(_user);
-
-        spyBalances[_user] += 1;
-        spyOwners[spyId] = _user;
+        spyBalances[msg.sender] += 1;
+        spyOwners[spyId] = msg.sender;
     }
 
 
@@ -132,7 +151,7 @@ contract SpyPool is ERC721Holder {
     /* ATTACK FUNCTION */
 
     //NOTE: It reverts if _spyId is owned by the pool itself
-    function killSpy(uint256 _knifeId, uint256 _spyId) public {
+    function killSpy(uint256 _knifeId, uint256 _spyId) public onlyIfActive {
         if (knifeOwners[_knifeId] != msg.sender) revert NotOwner();
 
         KNIFE_GAME.killSpy(_knifeId, _spyId);
@@ -144,7 +163,7 @@ contract SpyPool is ERC721Holder {
 
     /* WITHDRAW FUNCTIONS */
 
-    function withdrawSpy(uint256 _tokenId) external {
+    function withdrawSpy(uint256 _tokenId) external onlyIfActive {
         //TODO Review checks here, very important
         if (spyOwners[_tokenId] != msg.sender) revert NotOwner();
 
@@ -156,7 +175,7 @@ contract SpyPool is ERC721Holder {
         emit WithdrawSpy(msg.sender, _tokenId);
     }
 
-    function withdrawKnife(uint256 _tokenId) external {
+    function withdrawKnife(uint256 _tokenId) external onlyIfActive {
         //TODO Review checks here, very important
         if (knifeOwners[_tokenId] != msg.sender) revert NotOwner();
 
@@ -172,7 +191,7 @@ contract SpyPool is ERC721Holder {
     /* UTILS FUNCTIONS */
 
     //avoid double tx
-    function mintKnifeAndKillSpy(uint256 _maxPrice, uint256 _spyId) external returns (uint256 knifeId) {
+    function mintKnifeAndKillSpy(uint256 _maxPrice, uint256 _spyId) external onlyIfActive returns (uint256 knifeId) {
         knifeId = mintKnifeFromMoolah(_maxPrice);
         killSpy(knifeId, _spyId);
     }
