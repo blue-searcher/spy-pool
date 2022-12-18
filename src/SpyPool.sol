@@ -109,7 +109,9 @@ contract SpyPool is ERC721Holder {
 
         _mooBalance = totalMooBalance * spyBalances[_user] / totalSpies;
 
-        if (mooSpent[_user] > _mooBalance) revert NotEnoughtMooBalance();
+        if (mooSpent[_user] > _mooBalance) {
+            _mooBalance = 0;   
+        }
     }
 
 
