@@ -5,10 +5,14 @@ import { IERC721 } from "@openzeppelin/token/ERC721/extensions/ERC721Enumerable.
 import { ERC721Holder } from "@openzeppelin/token/ERC721/utils/ERC721Holder.sol";
 
 import { FixedPointMathLib } from "solmate/utils/FixedPointMathLib.sol";
+import { toDaysWadUnsafe } from "solmate/utils/SignedWadMath.sol";
+
+import { LibGOO } from "goo-issuance/LibGOO.sol";
 
 import { IKnifeGame } from "./interfaces/IKnifeGame.sol";
 import { ISpy } from "./interfaces/ISpy.sol";
 
+import "forge-std/console.sol";
 
 contract SpyPool is ERC721Holder {
     using FixedPointMathLib for uint256;
@@ -20,12 +24,12 @@ contract SpyPool is ERC721Holder {
     IERC721 public immutable KNIFE_NFT;
     IKnifeGame public immutable KNIFE_GAME;
 
-    mapping(address => uint256) public spyBalances;
+    mapping(address => ISpy.UserData) public getUserData;
+
+    mapping(address => uint256) internal spyBalances;
     mapping(uint256 => address) public spyOwners;
 
     mapping(uint256 => address) public knifeOwners;
-
-    mapping(address => uint256) public mooSpent;
 
     modifier onlyOwner() {
         require(msg.sender == owner);
@@ -74,6 +78,9 @@ contract SpyPool is ERC721Holder {
         stopped = 1;
     }
 
+    function activate() external onlyOwner {
+        stopped = 0;
+    }
 
 
     /* DEPOSITS */
@@ -83,6 +90,11 @@ contract SpyPool is ERC721Holder {
     function depositSpy(uint256 _tokenId) external onlyIfActive {
         SPY_NFT.transferFrom(msg.sender, address(this), _tokenId);
 
+        try this.mooBalance(msg.sender) returns (uint256 existingMooBal) {
+            getUserData[msg.sender].lastBalance = uint128(existingMooBal);
+        } catch {}
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
+        
         spyBalances[msg.sender] += 1;
         spyOwners[_tokenId] = msg.sender;
 
@@ -94,24 +106,40 @@ contract SpyPool is ERC721Holder {
     function depositKnife(uint256 _tokenId) external onlyIfActive {
         KNIFE_NFT.transferFrom(msg.sender, address(this), _tokenId);
 
+        getUserData[msg.sender].lastBalance = uint128(mooBalance(msg.sender));
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
+
         knifeOwners[_tokenId] = msg.sender;
 
         emit DepositKnife(msg.sender, _tokenId);
     }
 
 
-
     /* VIEW FUNCTIONS */
 
-    function mooBalance(address _user) public view returns (uint256 _mooBalance) {
-        uint256 totalMooBalance = SPY_NFT.gooBalance(address(this));
-        uint256 totalSpies = SPY_NFT.balanceOf(address(this));
+    function spyBalanceOf(address _user) public view returns (uint256 balance) {
+        //TODO Manage killed spies here, maybe not a view method
+        balance = spyBalances[_user];
+    }
 
-        _mooBalance = totalMooBalance * spyBalances[_user] / totalSpies;
+    function mooBalance(address _user) public view returns (uint256) {
+        return LibGOO.computeGOOBalance(
+            SPY_NFT.EMISSION_MULTIPLE() * spyBalanceOf(_user),
+            getUserData[_user].lastBalance,
+            uint256(toDaysWadUnsafe(block.timestamp - getUserData[_user].lastTimestamp))
+        );
+    }
 
-        if (mooSpent[_user] > _mooBalance) {
-            _mooBalance = 0;   
-        }
+
+    /* INTERNAL FUNCTIONS */
+
+    function updateUserMooBalance(address user, uint256 gooAmount, ISpy.GooBalanceUpdateType updateType) internal {
+        uint256 updatedBalance = updateType == ISpy.GooBalanceUpdateType.INCREASE 
+                                ? mooBalance(user) + gooAmount 
+                                : mooBalance(user) - gooAmount;
+
+        getUserData[user].lastBalance = uint128(updatedBalance);
+        getUserData[user].lastTimestamp = uint64(block.timestamp);
     }
 
 
@@ -119,10 +147,14 @@ contract SpyPool is ERC721Holder {
     /* MINT / PURCHASE FUNCTIONS */
 
     function mintSpyFromMoolah(uint256 _maxPrice) external onlyIfActive returns (uint256 spyId) {
+        updateUserMooBalance(
+            msg.sender,
+            KNIFE_GAME.spyPrice(),
+            ISpy.GooBalanceUpdateType.DECREASE
+        );
+
         //TODO Review checks here, very important
         if (mooBalance(msg.sender) < _maxPrice) revert NotEnoughtMooBalance();
-
-        mooSpent[msg.sender] += KNIFE_GAME.spyPrice();
 
         spyId = KNIFE_GAME.mintSpyFromMoolah(_maxPrice);
 
@@ -131,10 +163,14 @@ contract SpyPool is ERC721Holder {
     }
 
     function mintKnifeFromMoolah(uint256 _maxPrice) public onlyIfActive returns (uint256 knifeId) {
+        updateUserMooBalance(
+            msg.sender,
+            KNIFE_GAME.knifePrice(),
+            ISpy.GooBalanceUpdateType.DECREASE
+        );
+
         //TODO Review checks here, very important
         if (mooBalance(msg.sender) < _maxPrice) revert NotEnoughtMooBalance();
-
-        mooSpent[msg.sender] += KNIFE_GAME.knifePrice();
 
         knifeId = KNIFE_GAME.mintKnifeFromMoolah(_maxPrice);
 
@@ -146,6 +182,9 @@ contract SpyPool is ERC721Holder {
 
         spyBalances[msg.sender] += 1;
         spyOwners[spyId] = msg.sender;
+
+        getUserData[msg.sender].lastBalance = uint128(mooBalance(msg.sender));
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
     }
 
 
@@ -159,6 +198,10 @@ contract SpyPool is ERC721Holder {
         KNIFE_GAME.killSpy(_knifeId, _spyId);
 
         knifeOwners[_knifeId] = address(0);
+
+        //TODO Not sure if needed
+        getUserData[msg.sender].lastBalance = uint128(mooBalance(msg.sender));
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
     }
 
 
@@ -174,6 +217,9 @@ contract SpyPool is ERC721Holder {
         spyBalances[msg.sender] -= 1;
         spyOwners[_tokenId] = address(0);
 
+        getUserData[msg.sender].lastBalance = uint128(mooBalance(msg.sender));
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
+
         emit WithdrawSpy(msg.sender, _tokenId);
     }
 
@@ -184,6 +230,9 @@ contract SpyPool is ERC721Holder {
         KNIFE_NFT.transferFrom(address(this), msg.sender, _tokenId);
 
         knifeOwners[_tokenId] = address(0);
+
+        getUserData[msg.sender].lastBalance = uint128(mooBalance(msg.sender));
+        getUserData[msg.sender].lastTimestamp = uint64(block.timestamp);
 
         emit WithdrawKnife(msg.sender, _tokenId);
     }
@@ -198,6 +247,12 @@ contract SpyPool is ERC721Holder {
         killSpy(knifeId, _spyId);
     }
 
+    //TODO Add multiMintSpyFromMoolah
+    //TODO Add multiMintKnifeAndKillSpy
+    //TODO Add multiDepositSpy
+    //TODO Add multiDepositKnife
+    //TODO Add multiWithdrawSpy
+    //TODO Add multiWithdrawKnife
 
     /* ERRORS */
 

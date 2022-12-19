@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.13;
+
 //https://gist.github.com/knifegame/cdb09ba73d6cfe34ecc94c7c8a74a46e
 interface IKnifeGame {
   function BURN_ADDRESS () external view returns ( address );
